@@ -1,4 +1,4 @@
-name: CD — Deploy to AWS
+name: CD - Deploy AWS Infrastructure and Images
 
 on:
   workflow_run:
@@ -11,14 +11,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # ─── Build e Push para o ECR ────────────────────────────────────────────────
-  build_push:
-    name: Build & Push to ECR
+  deploy:
+    name: Deploy infrastructure and images
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-
-    outputs:
-      registry: ${{ steps.ecr-login.outputs.registry }}
 
     env:
       AWS_REGION: us-east-1
@@ -37,6 +33,15 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Apply AWS infrastructure
+        working-directory: infrastructure/terraform
+        run: |
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
 
       - name: Login to Amazon ECR
         id: ecr-login
@@ -87,61 +92,12 @@ jobs:
           echo "| processor | \`${{ github.event.workflow_run.head_sha }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| notification | \`${{ github.event.workflow_run.head_sha }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ─── Deploy para o ECS ──────────────────────────────────────────────────────
-  deploy_ecs:
-    name: Deploy to ECS
-    runs-on: ubuntu-latest
-    needs: build_push
-    continue-on-error: true
-
-    env:
-      AWS_REGION: us-east-1
-      PROJECT: hackaton
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region:            ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Deploy API to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-        with:
-          task-definition: ${{ env.PROJECT }}-api
-          service:         ${{ env.PROJECT }}-api
-          cluster:         ${{ env.PROJECT }}-cluster
-          wait-for-service-stability: false
-          image:          ${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-api:${{ github.event.workflow_run.head_sha }}
-          container-name: ${{ env.PROJECT }}-api
-
-      - name: Deploy Processor to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-        with:
-          task-definition: ${{ env.PROJECT }}-processor
-          service:         ${{ env.PROJECT }}-processor
-          cluster:         ${{ env.PROJECT }}-cluster
-          wait-for-service-stability: false
-          image:          ${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-processor:${{ github.event.workflow_run.head_sha }}
-          container-name: ${{ env.PROJECT }}-processor
-
-      - name: Deploy Notification to ECS
-        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
-        with:
-          task-definition: ${{ env.PROJECT }}-notification
-          service:         ${{ env.PROJECT }}-notification
-          cluster:         ${{ env.PROJECT }}-cluster
-          wait-for-service-stability: false
-          image:          ${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-notification:${{ github.event.workflow_run.head_sha }}
-          container-name: ${{ env.PROJECT }}-notification
+      - name: Verify published images
+        run: |
+          for service in api processor notification; do
+            aws ecr describe-images \
+              --repository-name "${PROJECT}-${service}" \
+              --image-ids imageTag="${{ github.event.workflow_run.head_sha }}" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text | grep -q '^sha256:'
+          done

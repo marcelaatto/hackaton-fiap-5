@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ─── Testes ────────────────────────────────────────────────────────────────
   test:
@@ -88,7 +95,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Init LocalStack (S3 + SQS)
         run: |
@@ -98,20 +105,28 @@ jobs:
           awslocal sqs create-queue --queue-name video-jobs-dlq
           awslocal sqs create-queue --queue-name video-failures
           awslocal sqs create-queue --queue-name video-jobs \
-            --attributes '{"VisibilityTimeout":"300","RedrivePolicy":"{\\"deadLetterTargetArn\\":\\"arn:aws:sqs:us-east-1:000000000000:video-jobs-dlq\\",\\"maxReceiveCount\\":\\"3\\"}"}'          
+            --attributes "RedrivePolicy={\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:000000000000:video-jobs-dlq\",\"maxReceiveCount\":\"3\"},VisibilityTimeout=300"
         env:
           AWS_ACCESS_KEY_ID: test
           AWS_SECRET_ACCESS_KEY: test
           AWS_DEFAULT_REGION: us-east-1
 
       - name: Test API (unit + integration + BDD)
+        id: test-api
         run: npm run test:api
+        continue-on-error: true
 
       - name: Test Processor
+        id: test-processor
+        if: always()
         run: npm run test:processor
+        continue-on-error: true
 
       - name: Test Notification
+        id: test-notification
+        if: always()
         run: npm run test:notification
+        continue-on-error: true
 
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v4
@@ -119,10 +134,15 @@ jobs:
         with:
           name: coverage-reports
           retention-days: 7
+          if-no-files-found: error
           path: |
             services/api/coverage/lcov.info
             services/processor/coverage/lcov.info
             services/notification/coverage/lcov.info
+
+      - name: Fail when a test suite fails
+        if: always() && (steps.test-api.outcome == 'failure' || steps.test-processor.outcome == 'failure' || steps.test-notification.outcome == 'failure')
+        run: exit 1
 
   # ─── SonarCloud ────────────────────────────────────────────────────────────
   sonar:

@@ -163,7 +163,7 @@ terraform plan
 terraform apply
 ```
 
-Recursos criados: S3 (2 buckets), SQS (3 filas + DLQ), IAM roles/policies, ECR (3 repositórios).
+Recursos criados: S3 (2 buckets), SQS (3 filas + DLQ), referência ao `LabRole` e ECR (3 repositórios).
 
 ---
 
@@ -172,7 +172,7 @@ Recursos criados: S3 (2 buckets), SQS (3 filas + DLQ), IAM roles/policies, ECR (
 | Pipeline | Trigger | Ação |
 |----------|---------|------|
 | **CI** (`.github/workflows/ci.yml`) | Push/PR em `main` | Testes, cobertura, SonarCloud |
-| **CD** (`.github/workflows/cd.yml`) | Após CI verde em `main` | Build → ECR → Deploy ECS |
+| **CD** (`.github/workflows/cd.yml`) | Após CI verde em `main` | Terraform apply → Build → Push ECR → Verificação das imagens |
 
 ### Secrets necessários no repositório GitHub
 
