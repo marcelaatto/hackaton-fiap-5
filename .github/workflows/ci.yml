@@ -97,20 +97,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Init LocalStack (S3 + SQS)
-        run: |
-          pip install awscli-local --quiet
-          awslocal s3 mb s3://hackaton-videos
-          awslocal s3 mb s3://hackaton-zips
-          awslocal sqs create-queue --queue-name video-jobs-dlq
-          awslocal sqs create-queue --queue-name video-failures
-          awslocal sqs create-queue --queue-name video-jobs \
-            --attributes "RedrivePolicy={\"deadLetterTargetArn\":\"arn:aws:sqs:us-east-1:000000000000:video-jobs-dlq\",\"maxReceiveCount\":\"3\"},VisibilityTimeout=300"
-        env:
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
-          AWS_DEFAULT_REGION: us-east-1
-
       - name: Test API (unit + integration + BDD)
         id: test-api
         run: npm run test:api
