@@ -1,0 +1,14 @@
+# Força LF em scripts shell para compatibilidade Linux/Docker
+*.sh text eol=lf
+
+# Força LF em arquivos de texto padrão
+*.js text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.tf text eol=lf
+*.env* text eol=lf
+Dockerfile text eol=lf
+.gitignore text eol=lf
+.sequelizerc text eol=lf

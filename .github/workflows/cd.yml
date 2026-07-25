@@ -1,0 +1,116 @@
+name: CD — Deploy to AWS
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [main]
+
+# Garante que apenas um deploy rode por vez
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, Push & Deploy
+    runs-on: ubuntu-latest
+    # Só executa se o CI passou
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    env:
+      AWS_REGION: us-east-1
+      ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+      PROJECT: hackaton
+
+    steps:
+      # ── Checkout ─────────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Configurar credenciais AWS ────────────────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # ── Login no Amazon ECR ───────────────────────────────────────────────────
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ── Build e Push das imagens Docker ──────────────────────────────────────
+      - name: Build & push — API
+        uses: docker/build-push-action@v5
+        with:
+          context:   .
+          file:      services/api/Dockerfile
+          push:      true
+          tags:      ${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-api:latest,${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-api:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-api:latest
+          cache-to:   type=inline
+
+      - name: Build & push — Processor
+        uses: docker/build-push-action@v5
+        with:
+          context:   .
+          file:      services/processor/Dockerfile
+          push:      true
+          tags:      ${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-processor:latest,${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-processor:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-processor:latest
+          cache-to:   type=inline
+
+      - name: Build & push — Notification
+        uses: docker/build-push-action@v5
+        with:
+          context:   .
+          file:      services/notification/Dockerfile
+          push:      true
+          tags:      ${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-notification:latest,${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-notification:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-notification:latest
+          cache-to:   type=inline
+
+      # ── Deploy via ECS (atualiza task definition com nova imagem) ─────────────
+      - name: Deploy API to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition:  ${{ env.PROJECT }}-api
+          service:          ${{ env.PROJECT }}-api
+          cluster:          ${{ env.PROJECT }}-cluster
+          wait-for-service-stability: true
+          image:            ${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-api:${{ github.sha }}
+          container-name:   ${{ env.PROJECT }}-api
+
+      - name: Deploy Processor to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition:  ${{ env.PROJECT }}-processor
+          service:          ${{ env.PROJECT }}-processor
+          cluster:          ${{ env.PROJECT }}-cluster
+          wait-for-service-stability: true
+          image:            ${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-processor:${{ github.sha }}
+          container-name:   ${{ env.PROJECT }}-processor
+
+      - name: Deploy Notification to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition:  ${{ env.PROJECT }}-notification
+          service:          ${{ env.PROJECT }}-notification
+          cluster:          ${{ env.PROJECT }}-cluster
+          wait-for-service-stability: true
+          image:            ${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-notification:${{ github.sha }}
+          container-name:   ${{ env.PROJECT }}-notification
+
+      # ── Resumo do deploy ──────────────────────────────────────────────────────
+      - name: Deployment summary
+        run: |
+          echo "### Deploy concluído ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Serviço | Imagem |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| api | \`${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-api:${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| processor | \`${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-processor:${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| notification | \`${{ env.ECR_REGISTRY }}/${{ env.PROJECT }}-notification:${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY

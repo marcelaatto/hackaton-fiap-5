@@ -1,0 +1,17 @@
+{
+  "name": "hackaton-fiap-5",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "services/*"
+  ],
+  "scripts": {
+    "api": "npm run dev --workspace=services/api",
+    "processor": "npm run dev --workspace=services/processor",
+    "notification": "npm run dev --workspace=services/notification",
+    "test": "npm run test --workspaces --if-present",
+    "test:api": "npm run test --workspace=services/api",
+    "test:processor": "npm run test --workspace=services/processor",
+    "test:notification": "npm run test --workspace=services/notification"
+  }
+}

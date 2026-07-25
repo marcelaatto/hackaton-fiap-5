@@ -1,0 +1,41 @@
+# Dependências
+node_modules/
+
+# Variáveis de ambiente
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Cobertura de testes
+coverage/
+
+# Build
+dist/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+
+# Diretórios de runtime do projeto base
+uploads/
+outputs/
+temp/
+
+# LocalStack data
+.localstack/
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfplan
+tfplan
+terraform.tfstate
+terraform.tfstate.backup

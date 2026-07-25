@@ -1,0 +1,10 @@
+node_modules/
+.git/
+.env
+coverage/
+*.log
+legacy/
+uploads/
+outputs/
+temp/
+.localstack/

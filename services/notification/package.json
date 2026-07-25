@@ -1,0 +1,27 @@
+{
+  "name": "@hackaton/notification",
+  "version": "1.0.0",
+  "description": "Worker de notificação de falhas no processamento",
+  "main": "src/worker.js",
+  "scripts": {
+    "start": "node src/worker.js",
+    "dev": "nodemon src/worker.js",
+    "test": "jest --coverage --forceExit"
+  },
+  "dependencies": {
+    "@hackaton/shared": "*",
+    "dotenv": "^16.4.5",
+    "nodemailer": "^6.9.14"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.4"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/unit/**/*.test.js"],
+    "coverageDirectory": "coverage",
+    "coverageReporters": ["lcov", "text", "text-summary"],
+    "collectCoverageFrom": ["src/**/*.js"]
+  }
+}

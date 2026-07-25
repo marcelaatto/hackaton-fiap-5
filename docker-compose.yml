@@ -1,0 +1,212 @@
+version: '3.9'
+
+services:
+  # =====================================================
+  # INFRAESTRUTURA
+  # =====================================================
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: hackaton-postgres
+    environment:
+      POSTGRES_USER: hackaton
+      POSTGRES_PASSWORD: hackaton
+      POSTGRES_DB: hackaton
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U hackaton']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hackaton-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: hackaton-redis
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hackaton-net
+
+  localstack:
+    image: localstack/localstack:3
+    container_name: hackaton-localstack
+    ports:
+      - '4566:4566'
+    environment:
+      SERVICES: s3,sqs
+      DEFAULT_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      PERSISTENCE: 0
+    volumes:
+      - './localstack/init.sh:/etc/localstack/init/ready.d/init.sh'
+      - '/var/run/docker.sock:/var/run/docker.sock'
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:4566/_localstack/health']
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - hackaton-net
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: hackaton-mailhog
+    ports:
+      - '1025:1025'   # SMTP
+      - '8025:8025'   # Web UI: http://localhost:8025
+    networks:
+      - hackaton-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: hackaton-prometheus
+    ports:
+      - '9090:9090'
+    volumes:
+      - './monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro'
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    networks:
+      - hackaton-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: hackaton-grafana
+    ports:
+      - '3000:3000'   # Web UI: http://localhost:3000 (admin/admin)
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - './monitoring/grafana/provisioning:/etc/grafana/provisioning:ro'
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - hackaton-net
+
+  # =====================================================
+  # MICROSSERVIÇOS
+  # =====================================================
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    container_name: hackaton-api
+    ports:
+      - '3001:3001'
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: hackaton
+      DB_USER: hackaton
+      DB_PASS: hackaton
+      REDIS_URL: redis://redis:6379
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+      # Hostname público do LocalStack para geração de presigned URLs acessíveis pelo cliente
+      AWS_ENDPOINT_URL_PUBLIC: http://localhost:4566
+      S3_BUCKET_VIDEOS: hackaton-videos
+      S3_BUCKET_ZIPS: hackaton-zips
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/video-jobs
+      JWT_SECRET: hackaton-jwt-secret-local
+      JWT_EXPIRES_IN: 24h
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    networks:
+      - hackaton-net
+    restart: on-failure
+
+  processor:
+    build:
+      context: .
+      dockerfile: services/processor/Dockerfile
+    container_name: hackaton-processor
+    environment:
+      NODE_ENV: development
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: hackaton
+      DB_USER: hackaton
+      DB_PASS: hackaton
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET_VIDEOS: hackaton-videos
+      S3_BUCKET_ZIPS: hackaton-zips
+      SQS_QUEUE_URL: http://localstack:4566/000000000000/video-jobs
+      SQS_FAILURES_QUEUE_URL: http://localstack:4566/000000000000/video-failures
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    networks:
+      - hackaton-net
+    restart: on-failure
+
+  notification:
+    build:
+      context: .
+      dockerfile: services/notification/Dockerfile
+    container_name: hackaton-notification
+    environment:
+      NODE_ENV: development
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localstack:4566
+      SQS_FAILURES_QUEUE_URL: http://localstack:4566/000000000000/video-failures
+      SMTP_HOST: mailhog
+      SMTP_PORT: 1025
+      SMTP_FROM: noreply@hackaton.local
+      LOG_LEVEL: info
+    depends_on:
+      localstack:
+        condition: service_healthy
+      mailhog:
+        condition: service_started
+    networks:
+      - hackaton-net
+    restart: on-failure
+
+# =====================================================
+# VOLUMES E REDES
+# =====================================================
+
+volumes:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  hackaton-net:
+    driver: bridge
