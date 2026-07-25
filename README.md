@@ -171,7 +171,7 @@ Recursos criados: S3 (2 buckets), SQS (3 filas + DLQ), referência ao `LabRole` 
 
 | Pipeline | Trigger | Ação |
 |----------|---------|------|
-| **CI** (`.github/workflows/ci.yml`) | Push/PR em `main` | Testes, cobertura, SonarCloud |
+| **CI** (`.github/workflows/ci.yml`) | Push/PR em `main` | Testes e cobertura; SonarCloud Automatic Analysis executa separadamente |
 | **CD** (`.github/workflows/cd.yml`) | Após CI verde em `main` | Terraform apply → Build → Push ECR → Verificação das imagens |
 
 ### Secrets necessários no repositório GitHub
@@ -182,7 +182,6 @@ Recursos criados: S3 (2 buckets), SQS (3 filas + DLQ), referência ao `LabRole` 
 | `AWS_SECRET_ACCESS_KEY` | Chave secreta AWS Lab |
 | `AWS_SESSION_TOKEN` | Token de sessão AWS Lab |
 | `AWS_ACCOUNT_ID` | ID da conta AWS (ex: `123456789012`) |
-| `SONAR_TOKEN` | Token do SonarCloud |
 
 ---
 

@@ -129,28 +129,3 @@ jobs:
       - name: Fail when a test suite fails
         if: always() && (steps.test-api.outcome == 'failure' || steps.test-processor.outcome == 'failure' || steps.test-notification.outcome == 'failure')
         run: exit 1
-
-  # ─── SonarCloud ────────────────────────────────────────────────────────────
-  sonar:
-    name: SonarCloud Analysis
-    runs-on: ubuntu-latest
-    needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Download coverage reports
-        uses: actions/download-artifact@v4
-        with:
-          name: coverage-reports
-          path: .
-
-      - name: SonarCloud Scan
-        uses: SonarSource/sonarcloud-github-action@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
