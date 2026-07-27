@@ -1,0 +1,267 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write   # necessário para o SonarCloud comentar em PRs
+
+# Cancela runs anteriores em PRs/develop, mas nunca no main (deploy não deve ser interrompido)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # JOB 1 — TESTES & COBERTURA
+  # ────────────────────────────────────────────────────────────────────────────
+  test:
+    name: "1 · Tests & Coverage"
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: hackaton
+          POSTGRES_PASSWORD: hackaton
+          POSTGRES_DB: hackaton
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      localstack:
+        image: localstack/localstack:3
+        env:
+          SERVICES: s3,sqs
+          DEFAULT_REGION: us-east-1
+        ports:
+          - 4566:4566
+        options: >-
+          --health-cmd "curl -sf http://localhost:4566/_localstack/health"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 10
+          --health-start-period 30s
+
+    env:
+      NODE_ENV: test
+      PORT: 3001
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: hackaton
+      DB_USER: hackaton
+      DB_PASS: hackaton
+      REDIS_URL: redis://localhost:6379
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_ENDPOINT_URL_PUBLIC: http://localhost:4566
+      S3_BUCKET_VIDEOS: hackaton-videos
+      S3_BUCKET_ZIPS: hackaton-zips
+      SQS_QUEUE_URL: http://localhost:4566/000000000000/video-jobs
+      SQS_FAILURES_QUEUE_URL: http://localhost:4566/000000000000/video-failures
+      JWT_SECRET: test-jwt-secret-ci
+      JWT_EXPIRES_IN: 24h
+      SMTP_HOST: localhost
+      SMTP_PORT: 1025
+      LOG_LEVEL: error
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test API (unit + integration + BDD)
+        id: test-api
+        run: npm run test:api
+        continue-on-error: true
+
+      - name: Test Processor
+        id: test-processor
+        if: always()
+        run: npm run test:processor
+        continue-on-error: true
+
+      - name: Test Notification
+        id: test-notification
+        if: always()
+        run: npm run test:notification
+        continue-on-error: true
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-reports
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            services/api/coverage/lcov.info
+            services/processor/coverage/lcov.info
+            services/notification/coverage/lcov.info
+
+      - name: Fail when a test suite fails
+        if: >-
+          always() && (
+            steps.test-api.outcome == 'failure' ||
+            steps.test-processor.outcome == 'failure' ||
+            steps.test-notification.outcome == 'failure'
+          )
+        run: exit 1
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # JOB 2 — SONARCLOUD  (quality gate)
+  # Necessário: secret SONAR_TOKEN configurado no repositório
+  # ────────────────────────────────────────────────────────────────────────────
+  sonar:
+    name: "2 · SonarCloud Analysis"
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # necessário para análise de blame/historico
+
+      - name: Download coverage reports
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-reports
+          path: .   # preserva estrutura: services/api/coverage/lcov.info etc.
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN:  ${{ secrets.SONAR_TOKEN }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # JOB 3 — DEPLOY AWS
+  # Executa apenas em push para main, após testes e Sonar passarem
+  # ────────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: "3 · Deploy to AWS"
+    runs-on: ubuntu-latest
+    needs: [test, sonar]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    env:
+      AWS_REGION: us-east-1
+      PROJECT:    hackaton
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Apply AWS infrastructure (S3 · SQS · ECR · IAM)
+        working-directory: infrastructure/terraform
+        run: |
+          terraform init -input=false
+          terraform apply -auto-approve -input=false
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push — API
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file:    services/api/Dockerfile
+          push:    true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-api:latest
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-api:${{ github.sha }}
+          cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-api:latest
+          cache-to:   type=inline
+
+      - name: Build & push — Processor
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file:    services/processor/Dockerfile
+          push:    true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-processor:latest
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-processor:${{ github.sha }}
+          cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-processor:latest
+          cache-to:   type=inline
+
+      - name: Build & push — Notification
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file:    services/notification/Dockerfile
+          push:    true
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-notification:latest
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-notification:${{ github.sha }}
+          cache-from: type=registry,ref=${{ steps.ecr-login.outputs.registry }}/${{ env.PROJECT }}-notification:latest
+          cache-to:   type=inline
+
+      - name: Verify published images
+        run: |
+          for service in api processor notification; do
+            aws ecr describe-images \
+              --repository-name "${PROJECT}-${service}" \
+              --image-ids imageTag="${{ github.sha }}" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text | grep -q '^sha256:'
+          done
+
+      - name: Build summary
+        run: |
+          echo "### Deploy concluído ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Etapa | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Infraestrutura (Terraform) | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| Imagens ECR publicadas | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Serviço | Tag |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-----|" >> $GITHUB_STEP_SUMMARY
+          echo "| api | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| processor | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| notification | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY

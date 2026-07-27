@@ -288,29 +288,51 @@ terraform apply tfplan
 
 ## 9. Deploy e CI/CD
 
-### 9.1 Pipeline CI (GitHub Actions — `ci.yml`)
+### 9.1 Pipeline Unificado (GitHub Actions — `ci-cd.yml`)
+
+Pipeline único com três jobs encadeados. O deploy só executa quando os testes **e** o quality gate do Sonar passam, e apenas em push direto à `main`.
 
 ```
-push/PR → main
-    └── Tests & Coverage
-          ├── npm test (api + processor + notification)
-          └── Upload coverage artifacts
-              └── SonarCloud Analysis (apenas push main)
+push / PR → main
+     │
+     ▼
+┌─────────────────────────────────────────────────────┐
+│  JOB 1 · Tests & Coverage                           │
+│  ├── PostgreSQL 15 · Redis 7 · LocalStack (S3+SQS) │
+│  ├── npm test:api  (unit + integration + BDD)       │
+│  ├── npm test:processor  (unit)                     │
+│  ├── npm test:notification  (unit)                  │
+│  └── upload coverage artifacts (lcov.info x3)      │
+└────────────────────┬────────────────────────────────┘
+                     │ needs: test
+                     ▼
+┌─────────────────────────────────────────────────────┐
+│  JOB 2 · SonarCloud Analysis                        │
+│  ├── download coverage artifacts                    │
+│  └── SonarSource/sonarcloud-github-action           │
+│       · quality gate · duplications · code smells  │
+└────────────────────┬────────────────────────────────┘
+                     │ needs: [test, sonar]
+                     │ if: push em main
+                     ▼
+┌─────────────────────────────────────────────────────┐
+│  JOB 3 · Deploy to AWS                              │
+│  ├── terraform init + apply  (S3 · SQS · ECR · IAM)│
+│  ├── docker build + push → ECR  (api)               │
+│  ├── docker build + push → ECR  (processor)         │
+│  ├── docker build + push → ECR  (notification)      │
+│  └── verify images (aws ecr describe-images)        │
+└─────────────────────────────────────────────────────┘
 ```
 
-### 9.2 Pipeline CD (GitHub Actions — `cd.yml`)
+### 9.2 Secrets necessários
 
-```
-push → main (após CI passar)
-    └── Build & Push Docker Images
-          ├── docker build api → ECR
-          ├── docker build processor → ECR
-          └── docker build notification → ECR
-              └── Deploy to AWS ECS
-                    ├── Update task definition api
-                    ├── Update task definition processor
-                    └── Update task definition notification
-```
+| Secret | Descrição |
+|--------|-----------|
+| `AWS_ACCESS_KEY_ID` | Chave de acesso AWS Lab |
+| `AWS_SECRET_ACCESS_KEY` | Chave secreta AWS Lab |
+| `AWS_SESSION_TOKEN` | Token de sessão temporária AWS Lab |
+| `SONAR_TOKEN` | Token do SonarCloud (Settings → Security) |
 
 ---
 

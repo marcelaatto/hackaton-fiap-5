@@ -33,6 +33,7 @@ Write-Host ""
 $awsAccessKey    = Read-Host "AWS_ACCESS_KEY_ID"
 $awsSecretKey    = Read-Host "AWS_SECRET_ACCESS_KEY"
 $awsSessionToken = Read-Host "AWS_SESSION_TOKEN"
+$sonarToken      = Read-Host "SONAR_TOKEN (SonarCloud: My Account > Security > Generate Token)"
 
 Write-Host ""
 Write-Host "Aplicando..." -ForegroundColor Cyan
@@ -40,6 +41,7 @@ Write-Host "Aplicando..." -ForegroundColor Cyan
 Set-GhSecret "AWS_ACCESS_KEY_ID"     $awsAccessKey
 Set-GhSecret "AWS_SECRET_ACCESS_KEY" $awsSecretKey
 Set-GhSecret "AWS_SESSION_TOKEN"     $awsSessionToken
+Set-GhSecret "SONAR_TOKEN"           $sonarToken
 
 Write-Host ""
 Write-Host "Concluido. Confira em:" -ForegroundColor Cyan
