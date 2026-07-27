@@ -21,6 +21,59 @@ function Write-Req($label, $url) {
 }
 
 # =============================================================================
+# VERIFICACAO DE PRE-REQUISITOS
+# Coloque os seus videos em:
+#   demo\video-1.mp4
+#   demo\video-2.mp4
+# =============================================================================
+$video1 = Join-Path $PSScriptRoot "demo\video-1.mp4"
+$video2 = Join-Path $PSScriptRoot "demo\video-2.mp4"
+
+Write-Host ""
+Write-Host "============================================================" -ForegroundColor Cyan
+Write-Host "  Verificando pre-requisitos..." -ForegroundColor Cyan
+Write-Host "============================================================" -ForegroundColor Cyan
+
+$prereqOk = $true
+
+# 1. Docker Desktop em execucao
+try {
+    $null = docker info 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Docker Desktop em execucao"
+    } else { throw }
+} catch {
+    Write-Host "  [ERRO] Docker Desktop nao esta em execucao. Inicie-o antes de continuar." -ForegroundColor Red
+    $prereqOk = $false
+}
+
+# 2. Videos de demonstracao
+if (Test-Path $video1) {
+    $s1 = [math]::Round((Get-Item $video1).Length / 1MB, 1)
+    Write-Ok "demo\video-1.mp4 encontrado ($s1 MB)"
+} else {
+    Write-Host "  [ERRO] demo\video-1.mp4 nao encontrado." -ForegroundColor Red
+    Write-Host "         Copie um arquivo .mp4 para: $video1" -ForegroundColor Yellow
+    $prereqOk = $false
+}
+
+if (Test-Path $video2) {
+    $s2 = [math]::Round((Get-Item $video2).Length / 1MB, 1)
+    Write-Ok "demo\video-2.mp4 encontrado ($s2 MB)"
+} else {
+    Write-Host "  [ERRO] demo\video-2.mp4 nao encontrado." -ForegroundColor Red
+    Write-Host "         Copie um arquivo .mp4 para: $video2" -ForegroundColor Yellow
+    $prereqOk = $false
+}
+
+if (-not $prereqOk) {
+    Write-Host ""
+    Write-Host "  Corrija os erros acima e execute o script novamente." -ForegroundColor Red
+    exit 1
+}
+Write-Host ""
+
+# =============================================================================
 # REQUISITO: Containers (Docker Compose)
 # =============================================================================
 Write-Step 1 "Subindo toda a infraestrutura (Docker Compose)"
@@ -90,21 +143,20 @@ $headers = @{ Authorization = "Bearer $token" }
 # =============================================================================
 Write-Step 4 "Upload de DOIS videos simultaneos (demonstra concorrencia via SQS)"
 
-# Cria um arquivo de video de teste
-$testVideo = Join-Path $env:TEMP "demo-video.mp4"
-[System.IO.File]::WriteAllBytes($testVideo, [byte[]](1..1024 | ForEach-Object { [byte]($_ % 256) }))
-Write-Ok "Arquivo de teste criado: $testVideo (1KB)"
-
 $videoIds = @()
 
 foreach ($i in 1..2) {
+    $videoFile = if ($i -eq 1) { $video1 } else { $video2 }
+    $videoName = Split-Path $videoFile -Leaf
+    $videoMB   = [math]::Round((Get-Item $videoFile).Length / 1MB, 1)
+    Write-Info "Video $i — $videoName ($videoMB MB)"
     Write-Info "Solicitando URL pre-assinada para video $i..."
     Write-Req "POST /videos/upload-url" "$API/videos/upload-url"
 
     $uploadResp = Invoke-RestMethod -Method Post -Uri "$API/videos/upload-url" `
         -Headers $headers `
         -ContentType "application/json" `
-        -Body (ConvertTo-Json @{ filename = "video-demo-$i.mp4" }) `
+        -Body (ConvertTo-Json @{ filename = $videoName }) `
         -ErrorAction Stop
 
     $videoId  = $uploadResp.video.id
@@ -114,7 +166,7 @@ foreach ($i in 1..2) {
 
     # Faz upload direto para o S3 (LocalStack)
     Write-Info "Enviando arquivo para S3 via PUT..."
-    $fileBytes = [System.IO.File]::ReadAllBytes($testVideo)
+    $fileBytes = [System.IO.File]::ReadAllBytes($videoFile)
     Invoke-WebRequest -Method Put -Uri $uploadUrl `
         -Body $fileBytes `
         -ContentType "video/mp4" | Out-Null
@@ -197,40 +249,6 @@ Write-Info "Grafana exibe dashboards em: http://localhost:3000  (admin / admin)"
 Start-Process "http://localhost:3000"
 Start-Process "http://localhost:9090"
 
-# =============================================================================
-# RESUMO DOS REQUISITOS
-# =============================================================================
-Write-Host ""
-Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "  RESUMO — REQUISITOS DO HACKATON" -ForegroundColor Cyan
-Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "FUNCIONAIS:" -ForegroundColor White
-Write-Host "  [OK] Processa mais de um video ao mesmo tempo (SQS + Processor async)" -ForegroundColor Green
-Write-Host "  [OK] Nao perde requisicoes em picos (SQS com DLQ — 3 tentativas)" -ForegroundColor Green
-Write-Host "  [OK] Protegido por usuario e senha (JWT + bcrypt)" -ForegroundColor Green
-Write-Host "  [OK] Listagem de status dos videos do usuario" -ForegroundColor Green
-Write-Host "  [OK] Notificacao em caso de erro (e-mail via MailHog/SMTP)" -ForegroundColor Green
-Write-Host ""
-Write-Host "TECNICOS:" -ForegroundColor White
-Write-Host "  [OK] Persistencia de dados (PostgreSQL + Redis)" -ForegroundColor Green
-Write-Host "  [OK] Arquitetura escalavel (3 microsservicos independentes)" -ForegroundColor Green
-Write-Host "  [OK] Versionado no GitHub com branches main/develop" -ForegroundColor Green
-Write-Host "  [OK] Testes com cobertura (unit + integration + BDD)" -ForegroundColor Green
-Write-Host "  [OK] CI/CD — GitHub Actions (ci.yml + cd.yml)" -ForegroundColor Green
-Write-Host ""
-Write-Host "STACK:" -ForegroundColor White
-Write-Host "  [OK] Containers — Docker + Docker Compose" -ForegroundColor Green
-Write-Host "  [OK] Mensageria — AWS SQS (LocalStack local / AWS real em producao)" -ForegroundColor Green
-Write-Host "  [OK] Banco de dados — PostgreSQL + Redis (cache)" -ForegroundColor Green
-Write-Host "  [OK] Monitoramento — Prometheus + Grafana" -ForegroundColor Green
-Write-Host "  [OK] CI/CD — GitHub Actions" -ForegroundColor Green
-Write-Host ""
-Write-Host "ENTREGAVEIS:" -ForegroundColor White
-Write-Host "  [OK] Documentacao da arquitetura (docs/architecture/C4.md + HLD.md)" -ForegroundColor Green
-Write-Host "  [OK] Scripts de banco de dados (services/api/src/database/migrations/)" -ForegroundColor Green
-Write-Host "  [OK] Link do GitHub — github.com/marcelaatto/hackaton-fiap-5" -ForegroundColor Green
-Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "  Para encerrar:  docker compose down -v" -ForegroundColor Yellow
 Write-Host "============================================================" -ForegroundColor Cyan
